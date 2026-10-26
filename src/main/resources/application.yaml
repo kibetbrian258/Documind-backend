@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: documind
+  profiles:
+    # Running the app with no profile set uses local development settings.
+    default: local
+  threads:
+    virtual:
+      # Java 21 virtual threads: cheap blocking I/O for SSE streams and AI calls.
+      enabled: true
+  jpa:
+    open-in-view: false
+    hibernate:
+      # Flyway owns the schema; Hibernate only checks that entities match it.
+      ddl-auto: validate
+  flyway:
+    locations: classpath:db/migration
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
