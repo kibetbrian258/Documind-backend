@@ -1,3 +1,5 @@
+# Local development services. Start with:  docker compose up -d
+
 services:
   postgres:
     image: pgvector/pgvector:pg17
@@ -7,7 +9,7 @@ services:
       POSTGRES_USER: documind
       POSTGRES_PASSWORD: documind
     ports:
-      - "5433:5432"
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -16,5 +18,16 @@ services:
       timeout: 3s
       retries: 10
 
+  # Runs AI models locally for free. Step 4 uses its embedding model (nomic-embed-text).
+  ollama:
+    image: ollama/ollama:latest
+    container_name: documind-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      # Downloaded models are kept here, so they survive restarts.
+      - ollama-data:/root/.ollama
+
 volumes:
   postgres-data:
+  ollama-data:

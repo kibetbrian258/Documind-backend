@@ -1,3 +1,6 @@
+# Shared settings for every profile.
+# Environment-specific values (database URL, credentials) live in application-<profile>.yml.
+
 spring:
   application:
     name: documind
@@ -15,6 +18,33 @@ spring:
       ddl-auto: validate
   flyway:
     locations: classpath:db/migration
+  datasource:
+    hikari:
+      # pgvector 0.8+: when a search is filtered (e.g. to one user), keep scanning the
+      # vector index until enough matches are found, instead of stopping early and
+      # wrongly answering "not found" once many users share the table.
+      connection-init-sql: SET hnsw.iterative_scan = strict_order
+  servlet:
+    multipart:
+      # FR-3: uploads up to 20 MB. The request may be slightly larger than the file.
+      max-file-size: 20MB
+      max-request-size: 21MB
+  ai:
+    vectorstore:
+      pgvector:
+        # Must match the embedding model's output size (nomic-embed-text: 768)
+        # and the vector(768) column in V4__create_vector_store.sql.
+        dimensions: 768
+        distance-type: cosine_distance
+        index-type: hnsw
+        # Flyway creates the table (V4), not Spring AI.
+        initialize-schema: false
+
+server:
+  tomcat:
+    # Lets Tomcat read the rest of an oversized upload so the browser
+    # receives the "too large" error instead of a dropped connection.
+    max-swallow-size: 50MB
 
 management:
   endpoints:
@@ -28,3 +58,35 @@ management:
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
+    csrf:
+      enabled: true
+
+documind:
+  auth:
+    jwt-secret: ${JWT_SECRET:}
+    session-duration: 7d
+    cookie-name: documind_token
+    cookie-secure: true
+  documents:
+    # Relative paths are resolved from the folder the app is started in.
+    storage-dir: ${STORAGE_DIR:./storage}
+    max-per-user: 50
+    # Starting values from FR-4; tune them later with the eval suite.
+    chunk-size-tokens: 500
+    chunk-overlap-tokens: 50
+    max-concurrent-ingestions: 2
+  retrieval:
+    # FR-7 starting values; tune with the search endpoint now and the eval suite later.
+    top-k: 5
+    similarity-threshold: 0.6
+  chat:
+    # FR-10: earlier messages sent along so follow-ups like "explain that more simply" work.
+    memory-messages: 10
+    stream-timeout: 5m
+    not-found-message: "I couldn't find that in your documents."
+    # FR-14: US dollars per million tokens, keyed by the model name the provider reports.
+    # Local Ollama models aren't listed, so they cost 0. Example for a cloud model:
+    # prices:
+    #   "[gpt-4o-mini]":
+    #     input-per-million-tokens: 0.15
+    #     output-per-million-tokens: 0.60

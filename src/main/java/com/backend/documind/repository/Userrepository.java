@@ -1,0 +1,13 @@
+package com.backend.documind.repository;
+
+import com.backend.documind.entity.User;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.Optional;
+import java.util.UUID;
+
+public interface Userrepository  extends JpaRepository<User, UUID> {
+    Optional<User> findByEmail(String email);
+
+    boolean existsByEmail(String email);
+}
