@@ -49,19 +49,20 @@ public class AuthController {
     @PostMapping("/register")
     @Operation(summary = "Create an account and log in")
     public ResponseEntity<UserResponse> register(@Valid @RequestBody RegisterRequest request) {
-        User user = authService.register(request.email(), request.password());
+        User user = authService.register(request.fullName(), request.email(), request.password());
         return ResponseEntity.status(HttpStatus.CREATED)
                 .header(HttpHeaders.SET_COOKIE, authCookies.loginCookie(jwtService.issueToken(user)).toString())
-                .body(UserResponse.from(user, quotaService.remainingToday(user)));
+                .body(UserResponse.from(user, quotaService.today(user)));
     }
 
     @PostMapping("/login")
     @Operation(summary = "Log in; sets the session cookie")
     public ResponseEntity<UserResponse> login(@Valid @RequestBody LoginRequest request) {
         User user = authService.authenticate(request.email(), request.password());
+        String cookie = authCookies.loginCookie(jwtService.issueToken(user), request.keepSignedIn()).toString();
         return ResponseEntity.ok()
-                .header(HttpHeaders.SET_COOKIE, authCookies.loginCookie(jwtService.issueToken(user)).toString())
-                .body(UserResponse.from(user, quotaService.remainingToday(user)));
+                .header(HttpHeaders.SET_COOKIE, cookie)
+                .body(UserResponse.from(user, quotaService.today(user)));
     }
 
     @PostMapping("/logout")

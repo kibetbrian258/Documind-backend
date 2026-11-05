@@ -30,7 +30,8 @@ import java.util.stream.Stream;
 /**
  * The core RAG pipeline: question in, cited answer out (PRD Flow B, steps 3-7).
  *
- *  1. retrieve the most relevant passages (RetrievalService: always this user's only)
+ *  1. retrieve the most relevant passages (RetrievalService: always this user's only),
+ *     and report them to onSearched
  *  2. nothing relevant -> the "not found" reply, without calling the AI model (US-6)
  *  3. otherwise send rules + recent messages + passages + question to the model
  *  4. pass each piece of the answer to onToken as it arrives
@@ -83,17 +84,26 @@ public class RagAnswerService {
                          int inputTokens, int outputTokens, long startedAt, long firstTokenAt, long finishedAt) {
     }
 
+    /** Same as below, for callers that don't need to know when the search has finished (EvalService). */
+    public Answer answer(UUID userId, String question, List<ChatMessage> history,
+                         Collection<UUID> documentIds, Consumer<String> onToken) {
+        return answer(userId, question, history, documentIds, passages -> { }, onToken);
+    }
+
     /**
      * @param history     earlier messages in the conversation, oldest first (empty for a fresh question)
      * @param documentIds optional: only search these documents
+     * @param onSearched  receives the passages found, once, before any text (empty means "not found")
      * @param onToken     receives each piece of the answer as it is written; may throw to stop early
      */
     public Answer answer(UUID userId, String question, List<ChatMessage> history,
-                         Collection<UUID> documentIds, Consumer<String> onToken) {
+                         Collection<UUID> documentIds, Consumer<List<RetrievedChunk>> onSearched,
+                         Consumer<String> onToken) {
         long startedAt = System.currentTimeMillis();
         String searchQuery = retrievalQuery(history, question);
         List<RetrievedChunk> passages = withOneRetry("search",
                 () -> retrievalService.retrieve(userId, searchQuery, documentIds));
+        onSearched.accept(passages);
 
         if (passages.isEmpty()) {
             String text = properties.notFoundMessage();

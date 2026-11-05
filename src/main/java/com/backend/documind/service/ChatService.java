@@ -4,6 +4,7 @@ import com.backend.documind.config.ChatProperties;
 import com.backend.documind.dto.AskRequest;
 import com.backend.documind.dto.ChatEvents;
 import com.backend.documind.dto.CitationResponse;
+import com.backend.documind.dto.RetrievedChunk;
 import com.backend.documind.entity.ChatMessage;
 import com.backend.documind.entity.Conversation;
 import com.backend.documind.entity.MessageCitation;
@@ -33,7 +34,8 @@ import java.util.concurrent.Executors;
  * RagAnswerService produces the answer; this class adds what a conversation needs:
  * - checks the conversation belongs to the user
  * - saves the question, the answer and its citations
- * - sends each piece of the answer to the browser as a "token" event, then a "citations" event
+ * - sends a "searched" event, each piece of the answer as a "token" event, then a "citations" event
+ * - removes the question again if no answer could be given (error, or the user pressed Stop)
  * - records tokens, cost and timing
  *
  * The work runs on a virtual thread so the request thread is free while the model writes.
@@ -43,9 +45,9 @@ import java.util.concurrent.Executors;
 @RequiredArgsConstructor
 public class ChatService {
 
-    private static final int SNIPPET_LENGTH = 300;
+    private static final int MAX_PASSAGE_LENGTH = 4_000;
     private static final String GENERIC_ERROR =
-            "Sorry, something went wrong while answering. Please try again in a moment.";
+            "The answer service didn't respond. We tried twice. This didn't use up a question — try again in a moment.";
 
     private final RagAnswerService ragAnswerService;
     private final ConversationService conversationService;
@@ -78,31 +80,40 @@ public class ChatService {
 
     private void answer(UUID userId, UUID conversationId, AskRequest request, SseEmitter emitter, long receivedAt) {
         String question = request.question().strip();
+        UUID questionId = null;
         try {
             List<ChatMessage> history = recentMessages(conversationId); // read before adding this question
-            saveQuestion(conversationId, question);
+            questionId = saveQuestion(conversationId, question);
 
             RagAnswerService.Answer answer = ragAnswerService.answer(
                     userId, question, history, request.documentIds(),
+                    passages -> send(emitter, ChatEvents.SEARCHED, new ChatEvents.Searched(passages.size(),
+                            (int) passages.stream().map(RetrievedChunk::documentId).distinct().count())),
                     piece -> send(emitter, ChatEvents.TOKEN, new ChatEvents.Token(piece)));
 
             UUID messageId = saveAnswer(conversationId, answer);
+            questionId = null; // answered and saved: keep the question whatever happens next
             if (answer.modelCalled()) {
                 usageService.recordChat(userId, messageId, answer.model(),
                         answer.inputTokens(), answer.outputTokens(),
                         answer.firstTokenAt() - receivedAt, answer.finishedAt() - receivedAt);
             }
 
-            send(emitter, ChatEvents.CITATIONS, new ChatEvents.Citations(messageId, answer.cited().stream()
-                    .map(p -> new CitationResponse(p.number(), p.chunk().documentId(), p.chunk().fileName(),
-                            p.chunk().page(), snippet(p.chunk().text()), p.chunk().similarity()))
-                    .toList()));
+            send(emitter, ChatEvents.CITATIONS, new ChatEvents.Citations(messageId, answer.notFound(),
+                    answer.cited().stream()
+                            .map(p -> new CitationResponse(p.number(), p.chunk().documentId(), p.chunk().fileName(),
+                                    p.chunk().page(), passage(p.chunk().text()), p.chunk().similarity()))
+                            .toList()));
             emitter.complete();
 
         } catch (ClientGoneException e) {
+            // "Stop" was pressed or the tab was closed. Nothing was answered, so the question is removed
+            // too; otherwise the conversation would show a question with no answer.
             log.debug("Client left conversation {} before the answer finished", conversationId);
+            removeQuestion(questionId);
         } catch (RuntimeException e) {
             log.error("Answering failed in conversation {}", conversationId, e);
+            removeQuestion(questionId); // so "Try again" doesn't leave the question in the conversation twice
             sendQuietly(emitter, ChatEvents.ERROR, new ChatEvents.StreamError(GENERIC_ERROR));
             emitter.complete();
         }
@@ -116,14 +127,25 @@ public class ChatService {
         return newestFirst;
     }
 
-    private void saveQuestion(UUID conversationId, String question) {
-        transactionTemplate.executeWithoutResult(status -> {
+    private UUID saveQuestion(UUID conversationId, String question) {
+        return transactionTemplate.execute(status -> {
             conversations.findById(conversationId).ifPresent(conversation -> {
                 conversation.titleFromFirstQuestion(question);
                 conversation.touch();
             });
-            messages.save(new ChatMessage(conversationId, MessageRole.USER, question));
+            return messages.save(new ChatMessage(conversationId, MessageRole.USER, question)).getId();
         });
+    }
+
+    private void removeQuestion(UUID questionId) {
+        if (questionId == null) {
+            return;
+        }
+        try {
+            messages.deleteById(questionId);
+        } catch (RuntimeException e) {
+            log.warn("Couldn't remove unanswered question {}", questionId, e);
+        }
     }
 
     private UUID saveAnswer(UUID conversationId, RagAnswerService.Answer answer) {
@@ -132,16 +154,20 @@ public class ChatService {
             citations.saveAll(answer.cited().stream()
                     .map(p -> new MessageCitation(saved.getId(), p.chunk().documentId(), p.number(),
                             p.chunk().page(), UUID.fromString(p.chunk().chunkId()),
-                            p.chunk().similarity(), snippet(p.chunk().text())))
+                            p.chunk().similarity(), passage(p.chunk().text())))
                     .toList());
             conversations.findById(conversationId).ifPresent(Conversation::touch);
             return saved.getId();
         });
     }
 
-    private static String snippet(String text) {
+    /**
+     * The passage as shown in the source panel: the whole chunk (about 500 tokens),
+     * with runs of spaces and line breaks tidied up. The cap is only a safety limit.
+     */
+    private static String passage(String text) {
         String clean = text.strip().replaceAll("\\s+", " ");
-        return clean.length() <= SNIPPET_LENGTH ? clean : clean.substring(0, SNIPPET_LENGTH).strip() + "…";
+        return clean.length() <= MAX_PASSAGE_LENGTH ? clean : clean.substring(0, MAX_PASSAGE_LENGTH).strip() + "…";
     }
 
     private static void send(SseEmitter emitter, String eventName, Object data) {

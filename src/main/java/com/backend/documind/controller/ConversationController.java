@@ -77,7 +77,8 @@ public class ConversationController {
     // lets errors raised before streaming starts (404, invalid input) still be returned as JSON.
     @PostMapping(path = "/{id}/ask", consumes = MediaType.APPLICATION_JSON_VALUE)
     @Operation(summary = "Ask a question; the answer streams back as Server-Sent Events",
-            description = "Events: 'token' (a piece of the answer, many times), 'citations' (once, at the end), "
+            description = "Events: 'searched' (once, how many passages were found), 'token' (a piece of the answer, "
+                    + "many times), 'citations' (once, at the end; notFound=true for the \"couldn't find that\" reply), "
                     + "'error' (only if something went wrong). Swagger UI shows all events once the answer is complete.")
     public SseEmitter ask(@AuthenticationPrincipal Jwt jwt, @PathVariable UUID id,
                           @Valid @RequestBody AskRequest request) {

@@ -8,6 +8,7 @@ import com.backend.documind.entity.Document;
 import com.backend.documind.entity.FeedbackRating;
 import com.backend.documind.entity.MessageFeedback;
 import com.backend.documind.entity.MessageCitation;
+import com.backend.documind.entity.MessageRole;
 import com.backend.documind.repository.ChatMessageRepository;
 import com.backend.documind.repository.ConversationRepository;
 import com.backend.documind.repository.DocumentRepository;
@@ -41,6 +42,7 @@ public class ConversationService {
     private final MessageCitationRepository citations;
     private final DocumentRepository documents;
     private final MessageFeedbackRepository feedback;
+    private final RagAnswerService ragAnswerService;
 
     @Transactional
     public Conversation create(UUID userId, String title) {
@@ -100,22 +102,34 @@ public class ConversationService {
                 .collect(Collectors.toMap(MessageFeedback::getMessageId, MessageFeedback::getRating));
 
         return conversationMessages.stream()
-                .map(message -> new MessageResponse(
-                        message.getId(),
-                        message.getRole(),
-                        message.getContent(),
-                        message.getCreatedAt(),
-                        citationsByMessage.getOrDefault(message.getId(), List.of()).stream()
-                                .map(citation -> new CitationResponse(
-                                        citation.getCitationNumber(),
-                                        citation.getDocumentId(),
-                                        fileNames.getOrDefault(citation.getDocumentId(), "Deleted document"),
-                                        citation.getPage(),
-                                        citation.getSnippet(),
-                                        citation.getSimilarityScore()))
-                                .toList(),
-                        ratings.get(message.getId())))
+                .map(message -> {
+                    List<CitationResponse> messageCitations = citationsByMessage
+                            .getOrDefault(message.getId(), List.of()).stream()
+                            .map(citation -> new CitationResponse(
+                                    citation.getCitationNumber(),
+                                    citation.getDocumentId(),
+                                    fileNames.getOrDefault(citation.getDocumentId(), "Deleted document"),
+                                    citation.getPage(),
+                                    citation.getSnippet(),
+                                    citation.getSimilarityScore()))
+                            .toList();
+                    return new MessageResponse(
+                            message.getId(),
+                            message.getRole(),
+                            message.getContent(),
+                            message.getCreatedAt(),
+                            messageCitations,
+                            ratings.get(message.getId()),
+                            isNotFoundAnswer(message, messageCitations));
+                })
                 .toList();
+    }
+
+    /** "Not found" answers are saved without citations, so the text is checked only for those. */
+    private boolean isNotFoundAnswer(ChatMessage message, List<CitationResponse> messageCitations) {
+        return message.getRole() == MessageRole.ASSISTANT
+                && messageCitations.isEmpty()
+                && ragAnswerService.isNotFound(message.getContent());
     }
 
     private Map<UUID, String> fileNames(UUID userId, Collection<UUID> documentIds) {

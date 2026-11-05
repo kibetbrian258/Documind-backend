@@ -33,6 +33,18 @@ public class QuotaService {
     private final AuthService authService;
     private final ChatProperties properties;
 
+    /**
+     * @param remaining questions left today
+     * @param resetsAt  when the count starts again from zero (the next midnight)
+     */
+    public record Quota(int remaining, Instant resetsAt) {
+    }
+
+    @Transactional(readOnly = true)
+    public Quota today(User user) {
+        return new Quota(remainingToday(user), startOfTomorrow());
+    }
+
     @Transactional(readOnly = true)
     public int remainingToday(User user) {
         long used = usageRecords.countByUserIdAndCreatedAtGreaterThanEqual(user.getId(), startOfToday());
@@ -53,6 +65,11 @@ public class QuotaService {
     private Instant startOfToday() {
         ZoneId zone = zone();
         return LocalDate.now(zone).atStartOfDay(zone).toInstant();
+    }
+
+    private Instant startOfTomorrow() {
+        ZoneId zone = zone();
+        return LocalDate.now(zone).plusDays(1).atStartOfDay(zone).toInstant();
     }
 
     private ZoneId zone() {

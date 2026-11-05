@@ -25,11 +25,11 @@ public class MeController {
     private final QuotaService quotaService;
 
     @GetMapping
-    @Operation(summary = "Current user and remaining daily questions")
+    @Operation(summary = "Current user, remaining daily questions and when they refill")
     public UserResponse me(@AuthenticationPrincipal Jwt jwt) {
         // The token's subject is the user's id, set by JwtService at login.
         UUID userId = UUID.fromString(jwt.getSubject());
         User user = authService.getActiveUser(userId);
-        return UserResponse.from(user, quotaService.remainingToday(user));
+        return UserResponse.from(user, quotaService.today(user));
     }
 }
